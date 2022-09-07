@@ -4,18 +4,20 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart' as ffi;
-import 'bindings/ndi_ffi_bindigs.dart';
+import 'bindings/ndi_ffi_bindings.dart';
 
 NDIffi _ndi = NDIffi(DynamicLibrary.open("libndi.so"));
-final String sName = "Phone 1";
 
 class NDISend {
-  NDISend(String sname) {
+  late String _sendName;
+
+  NDISend(String sendName) {
     _ndi.NDIlib_v5_load();
     if (!_ndi.NDIlib_initialize()) {
       throw Exception("Could not initialize NDI");
     }
-
+    print(_ndi.NDIlib_version().cast<ffi.Utf8>().toDartString());
+    _sendName = sendName;
   }
 
   ReceivePort? _sendReceivePort;
@@ -26,10 +28,11 @@ class NDISend {
   Pointer? _pSendSettings;
   Pointer? _pSendName;
 
-
   Future<void> sendFrames(NDIFrame frame) async {
     final completer = Completer();
+
     _sendReceivePort = ReceivePort();
+
     _sendReceivePort!.listen((data) {
       if (data is SendPort) {
         _sendSendPort = data;
@@ -46,7 +49,13 @@ class NDISend {
       completer.complete();
     });
 
-    _sendIsolate = await Isolate.spawn(_sendFrames, SendObject(frame: frame, sendPort: _sendReceivePort!.sendPort));
+    _sendIsolate = await Isolate.spawn(
+        _sendFrames,
+        SendObject(
+          frame: frame,
+          sendPort: _sendReceivePort!.sendPort,
+          sendName: _sendName,
+        ));
     return completer.future;
   }
 
@@ -75,7 +84,6 @@ class NDISend {
 
   static void _sendFrames(SendObject object) async {
     ReceivePort receivePort = ReceivePort();
-    object.sendPort.send(receivePort.sendPort);
 
     receivePort.listen((data) {
       if (data is NDIFrame) {
@@ -87,14 +95,20 @@ class NDISend {
       }
     });
 
+    object.sendPort.send(receivePort.sendPort);
+
     Pointer<NDIlib_send_create_t> pCreateSettings = ffi.calloc.call<NDIlib_send_create_t>(1);
-    final pNDIName = sName.toNativeUtf8().cast<Int8>();
+    final pNDIName = object.sendName.toNativeUtf8().cast<Int8>();
     pCreateSettings.ref.p_ndi_name = pNDIName;
     pCreateSettings.ref.clock_audio = 0;
     pCreateSettings.ref.clock_video = 0;
+
     NDIlib_send_instance_t pSend = _ndi.NDIlib_send_create(pCreateSettings);
+
     if (pSend == nullptr) {
-      print("error creating sender");
+      print("ERROR creating sender");
+    } else {
+      print("Successfully created sender");
     }
     object.sendPort.send(<String, int>{
       "pSendInstance": pSend.address,
@@ -114,7 +128,12 @@ class NDISend {
 class SendObject {
   NDIFrame frame;
   SendPort sendPort;
-  SendObject({required this.frame, required this.sendPort});
+  String sendName;
+  SendObject({
+    required this.frame,
+    required this.sendPort,
+    required this.sendName,
+  });
 }
 
 class NDIFrame {
