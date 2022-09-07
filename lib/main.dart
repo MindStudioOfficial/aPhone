@@ -3,12 +3,16 @@
 // found in the LICENSE file.
 
 import 'dart:async';
+import 'dart:typed_data';
+import 'package:ffi/ffi.dart';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:osc/osc.dart';
@@ -17,6 +21,11 @@ import 'package:ansicolor/ansicolor.dart';
 import 'package:video_player/video_player.dart';
 import 'package:vibration/vibration.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'package:image/image.dart' as imglib;
+import 'ndi/bindings/ndi_ffi_bindigs.dart';
+import 'ndi/ndisend.dart';
+import 'dart:ui' as ui;
 
 /// Camera example home widget.
 class APhoneApp extends StatefulWidget {
@@ -58,7 +67,7 @@ class _APhoneAppState extends State<APhoneApp>
   XFile? videoFile;
   VideoPlayerController? videoController;
   VoidCallback? videoPlayerListener;
-  bool enableAudio = true;
+  bool isStreaming = false;
   double _minAvailableExposureOffset = 0.0;
   double _maxAvailableExposureOffset = 0.0;
   double _currentExposureOffset = 0.0;
@@ -68,8 +77,8 @@ class _APhoneAppState extends State<APhoneApp>
   late Animation<double> _exposureModeControlRowAnimation;
   late AnimationController _focusModeControlRowAnimationController;
   late Animation<double> _focusModeControlRowAnimation;
-  double _minAvailableZoom = 1.0;
-  double _maxAvailableZoom = 1.0;
+  double _minAvailableZoom = 0.1;
+  double _maxAvailableZoom = 2.0;
   double _currentScale = 1.0;
   double _baseScale = 1.0;
 
@@ -77,16 +86,39 @@ class _APhoneAppState extends State<APhoneApp>
   int _pointers = 0;
 
   //OSC
-  final socket = OSCSocket(serverPort: 9000);
+  final osc = OSCSocket(serverPort: 9000);
   final greenPen = AnsiPen()..green(bold: true);
   final bluePen = AnsiPen()..blue(bold: true);
   final grayPen = AnsiPen()..gray(level: 0.5);
+
+  //Websocket
+  //WebSocket? ws;
+
+  final camKey = GlobalKey();
+  ui.Image? img;
+  late NDIFrame frame;
+  late Pointer<Uint8> pData;
+  late int maxLen = 0;//resX * resY * 4;
+  // Timer? timer;
+
+  int lastTimeSent = 0;
 
   @override
   void initState() {
     super.initState();
 
-    socket.listen(onOSCData);
+    osc.listen(onOSCData);
+
+    pData = calloc.call<Uint8>(maxLen);
+
+    // Future.delayed(const Duration(milliseconds: 10), () {
+    //   timer = Timer.periodic(
+    //       Duration(
+    //         milliseconds: 500 ~/ (frame.frameRateN / frame.frameRateD),
+    //       ), (t) {
+    //     update();
+    //   });
+    // });
 
     _ambiguate(WidgetsBinding.instance)?.addObserver(this);
 
@@ -114,6 +146,8 @@ class _APhoneAppState extends State<APhoneApp>
       parent: _focusModeControlRowAnimationController,
       curve: Curves.easeInCubic,
     );
+
+    onNewCameraSelected(_cameras[0]);
   }
 
   void onOSCData(msg) async {
@@ -178,6 +212,11 @@ class _APhoneAppState extends State<APhoneApp>
     _ambiguate(WidgetsBinding.instance)?.removeObserver(this);
     _flashModeControlRowAnimationController.dispose();
     _exposureModeControlRowAnimationController.dispose();
+
+    //timer?.cancel();
+    ndiSend.stopSendFrames();
+    calloc.free(pData);
+
     super.dispose();
   }
 
@@ -199,18 +238,55 @@ class _APhoneAppState extends State<APhoneApp>
   }
   // #enddocregion AppLifecycle
 
+  Future<void> capture() async {
+    final boundary =
+        camKey.currentContext?.findRenderObject() as RenderRepaintBoundary;
+
+    img = await boundary.toImage();
+    final bytes = await img!.toByteData(format: ui.ImageByteFormat.rawRgba);
+
+    pData.asTypedList(maxLen).setRange(
+          0,
+          bytes!.lengthInBytes < maxLen ? bytes.lengthInBytes : maxLen,
+          bytes.buffer.asUint8List(),
+        );
+  }
+
+  @override
+  // void reassemble() {
+  //   super.reassemble();
+  //   timer?.cancel();
+  //   ndiSend.stopSendFrames();
+  //   ndiSend.sendFrames(frame);
+  //   Future.delayed(const Duration(milliseconds: 10), () {
+  //     timer = Timer.periodic(
+  //         Duration(
+  //           milliseconds: 500 ~/ (frame.frameRateN / frame.frameRateD),
+  //         ), (t) {
+  //       update();
+  //     });
+  //   });
+  // }
+
+  // void update() {
+  //   capture().then((_) {
+  //     ndiSend.updateFrame(frame);
+  //   });
+  // }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        body: Container(
-            decoration: BoxDecoration(
-              color: Colors.black,
-            ),
-            child: 
-            (videoController != null && videoController!.value.isPlaying)
-                ? _fittedPlayer(videoController!)
-                : _liveCamera()
-                ));
+        body: RepaintBoundary(
+            key: camKey,
+            child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                ),
+                child: (videoController != null &&
+                        videoController!.value.isPlaying)
+                    ? _fittedPlayer(videoController!)
+                    : _liveCamera())));
   }
 
   Widget _liveCamera() {
@@ -256,7 +332,8 @@ class _APhoneAppState extends State<APhoneApp>
         ),
       );
     } else {
-      return Listener(
+      return Container(
+          child: Listener(
         onPointerDown: (_) => _pointers++,
         onPointerUp: (_) => _pointers--,
         child: CameraPreview(
@@ -272,7 +349,7 @@ class _APhoneAppState extends State<APhoneApp>
             );
           }),
         ),
-      );
+      ));
     }
   }
 
@@ -294,16 +371,15 @@ class _APhoneAppState extends State<APhoneApp>
 
   //
   Widget _fittedPlayer(videoController) {
-    return 
-      Container(
+    return Container(
         alignment: Alignment.center,
         decoration: BoxDecoration(color: Colors.black),
         child: FittedBox(
           alignment: Alignment.center,
           fit: BoxFit.contain,
           child: SizedBox(
-            height: max(videoController.value.size?.height ?? 10,10),
-            width: max(videoController.value.size?.width ?? 10,10),
+            height: max(videoController.value.size?.height ?? 10, 10),
+            width: max(videoController.value.size?.width ?? 10, 10),
             child: VideoPlayer(videoController),
           ),
         ));
@@ -384,18 +460,9 @@ class _APhoneAppState extends State<APhoneApp>
                   ]
                 : <Widget>[],
             IconButton(
-              icon: Icon(enableAudio ? Icons.volume_up : Icons.volume_mute),
-              color: Colors.blue,
-              onPressed: controller != null ? onAudioModeButtonPressed : null,
-            ),
-            IconButton(
-              icon: Icon(controller?.value.isCaptureOrientationLocked ?? false
-                  ? Icons.screen_lock_rotation
-                  : Icons.screen_rotation),
-              color: Colors.blue,
-              onPressed: controller != null
-                  ? onCaptureOrientationLockButtonPressed
-                  : null,
+              icon: Icon(Icons.wifi_tethering),
+              color: isStreaming ? Colors.red : Colors.grey,
+              onPressed: controller != null ? onStreamingButtonPressed : null,
             ),
           ],
         ),
@@ -600,67 +667,6 @@ class _APhoneAppState extends State<APhoneApp>
     );
   }
 
-  /// Display the control bar with buttons to take pictures and record videos.
-  Widget _captureControlRowWidget() {
-    final CameraController? cameraController = controller;
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: <Widget>[
-        IconButton(
-          icon: const Icon(Icons.camera_alt),
-          color: Colors.blue,
-          onPressed: cameraController != null &&
-                  cameraController.value.isInitialized &&
-                  !cameraController.value.isRecordingVideo
-              ? onTakePictureButtonPressed
-              : null,
-        ),
-        IconButton(
-          icon: const Icon(Icons.videocam),
-          color: Colors.blue,
-          onPressed: cameraController != null &&
-                  cameraController.value.isInitialized &&
-                  !cameraController.value.isRecordingVideo
-              ? onVideoRecordButtonPressed
-              : null,
-        ),
-        IconButton(
-          icon: cameraController != null &&
-                  cameraController.value.isRecordingPaused
-              ? const Icon(Icons.play_arrow)
-              : const Icon(Icons.pause),
-          color: Colors.blue,
-          onPressed: cameraController != null &&
-                  cameraController.value.isInitialized &&
-                  cameraController.value.isRecordingVideo
-              ? (cameraController.value.isRecordingPaused)
-                  ? onResumeButtonPressed
-                  : onPauseButtonPressed
-              : null,
-        ),
-        IconButton(
-          icon: const Icon(Icons.stop),
-          color: Colors.red,
-          onPressed: cameraController != null &&
-                  cameraController.value.isInitialized &&
-                  cameraController.value.isRecordingVideo
-              ? onStopButtonPressed
-              : null,
-        ),
-        IconButton(
-          icon: const Icon(Icons.pause_presentation),
-          color:
-              cameraController != null && cameraController.value.isPreviewPaused
-                  ? Colors.red
-                  : Colors.blue,
-          onPressed:
-              cameraController == null ? null : onPausePreviewButtonPressed,
-        ),
-      ],
-    );
-  }
-
   /// Display a row of toggle to select the camera (or a message if no camera is available).
   Widget _cameraTogglesRowWidget() {
     final List<Widget> toggles = <Widget>[];
@@ -733,14 +739,22 @@ class _APhoneAppState extends State<APhoneApp>
       // which triggers `didChangeAppLifecycleState`, which disposes and
       // re-creates the controller.
       controller = null;
+      try {
+        if (isStreaming) oldController.stopImageStream();
+      } on CameraException catch (e) {
+        _showCameraException(e);
+      }
+
       await oldController.dispose();
     }
 
+    final cameraRes = ResolutionPreset.ultraHigh;
+
     final CameraController cameraController = CameraController(
       cameraDescription,
-      kIsWeb ? ResolutionPreset.max : ResolutionPreset.medium,
-      enableAudio: enableAudio,
-      imageFormatGroup: ImageFormatGroup.jpeg,
+      cameraRes,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.yuv420,
     );
 
     controller = cameraController;
@@ -758,6 +772,9 @@ class _APhoneAppState extends State<APhoneApp>
 
     try {
       await cameraController.initialize();
+
+      if (isStreaming) cameraController.startImageStream(sendCameraImage);
+
       await Future.wait(<Future<Object?>>[
         // The exposure mode is currently not supported on the web.
         ...!kIsWeb
@@ -811,21 +828,6 @@ class _APhoneAppState extends State<APhoneApp>
     }
   }
 
-  void onTakePictureButtonPressed() {
-    takePicture().then((XFile? file) {
-      if (mounted) {
-        setState(() {
-          imageFile = file;
-          videoController?.dispose();
-          videoController = null;
-        });
-        if (file != null) {
-          showInSnackBar('Picture saved to ${file.path}');
-        }
-      }
-    });
-  }
-
   void onFlashModeButtonPressed() {
     if (_flashModeControlRowAnimationController.value == 1) {
       _flashModeControlRowAnimationController.reverse();
@@ -856,29 +858,8 @@ class _APhoneAppState extends State<APhoneApp>
     }
   }
 
-  void onAudioModeButtonPressed() {
-    enableAudio = !enableAudio;
-    if (controller != null) {
-      onNewCameraSelected(controller!.description);
-    }
-  }
-
-  Future<void> onCaptureOrientationLockButtonPressed() async {
-    try {
-      if (controller != null) {
-        final CameraController cameraController = controller!;
-        if (cameraController.value.isCaptureOrientationLocked) {
-          await cameraController.unlockCaptureOrientation();
-          showInSnackBar('Capture orientation unlocked');
-        } else {
-          await cameraController.lockCaptureOrientation();
-          showInSnackBar(
-              'Capture orientation locked to ${cameraController.value.lockedCaptureOrientation.toString().split('.').last}');
-        }
-      }
-    } on CameraException catch (e) {
-      _showCameraException(e);
-    }
+  void onStreamingButtonPressed() {
+    setStreamingMode(!isStreaming);
   }
 
   void onSetFlashModeButtonPressed(FlashMode mode) {
@@ -908,130 +889,6 @@ class _APhoneAppState extends State<APhoneApp>
     });
   }
 
-  void onVideoRecordButtonPressed() {
-    startVideoRecording().then((_) {
-      if (mounted) {
-        setState(() {});
-      }
-    });
-  }
-
-  void onStopButtonPressed() {
-    stopVideoRecording().then((XFile? file) {
-      if (mounted) {
-        setState(() {});
-      }
-      if (file != null) {
-        showInSnackBar('Video recorded to ${file.path}');
-        videoFile = file;
-        _startVideoPlayer();
-      }
-    });
-  }
-
-  Future<void> onPausePreviewButtonPressed() async {
-    final CameraController? cameraController = controller;
-
-    if (cameraController == null || !cameraController.value.isInitialized) {
-      showInSnackBar('Error: select a camera first.');
-      return;
-    }
-
-    if (cameraController.value.isPreviewPaused) {
-      await cameraController.resumePreview();
-    } else {
-      await cameraController.pausePreview();
-    }
-
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  void onPauseButtonPressed() {
-    pauseVideoRecording().then((_) {
-      if (mounted) {
-        setState(() {});
-      }
-      showInSnackBar('Video recording paused');
-    });
-  }
-
-  void onResumeButtonPressed() {
-    resumeVideoRecording().then((_) {
-      if (mounted) {
-        setState(() {});
-      }
-      showInSnackBar('Video recording resumed');
-    });
-  }
-
-  Future<void> startVideoRecording() async {
-    final CameraController? cameraController = controller;
-
-    if (cameraController == null || !cameraController.value.isInitialized) {
-      showInSnackBar('Error: select a camera first.');
-      return;
-    }
-
-    if (cameraController.value.isRecordingVideo) {
-      // A recording is already started, do nothing.
-      return;
-    }
-
-    try {
-      await cameraController.startVideoRecording();
-    } on CameraException catch (e) {
-      _showCameraException(e);
-      return;
-    }
-  }
-
-  Future<XFile?> stopVideoRecording() async {
-    final CameraController? cameraController = controller;
-
-    if (cameraController == null || !cameraController.value.isRecordingVideo) {
-      return null;
-    }
-
-    try {
-      return cameraController.stopVideoRecording();
-    } on CameraException catch (e) {
-      _showCameraException(e);
-      return null;
-    }
-  }
-
-  Future<void> pauseVideoRecording() async {
-    final CameraController? cameraController = controller;
-
-    if (cameraController == null || !cameraController.value.isRecordingVideo) {
-      return;
-    }
-
-    try {
-      await cameraController.pauseVideoRecording();
-    } on CameraException catch (e) {
-      _showCameraException(e);
-      rethrow;
-    }
-  }
-
-  Future<void> resumeVideoRecording() async {
-    final CameraController? cameraController = controller;
-
-    if (cameraController == null || !cameraController.value.isRecordingVideo) {
-      return;
-    }
-
-    try {
-      await cameraController.resumeVideoRecording();
-    } on CameraException catch (e) {
-      _showCameraException(e);
-      rethrow;
-    }
-  }
-
   Future<void> setFlashMode(FlashMode mode) async {
     if (controller == null) {
       return;
@@ -1041,7 +898,7 @@ class _APhoneAppState extends State<APhoneApp>
       await controller!.setFlashMode(mode);
     } on CameraException catch (e) {
       _showCameraException(e);
-      rethrow;
+      //rethrow;
     }
   }
 
@@ -1054,7 +911,7 @@ class _APhoneAppState extends State<APhoneApp>
       await controller!.setExposureMode(mode);
     } on CameraException catch (e) {
       _showCameraException(e);
-      rethrow;
+      //rethrow;
     }
   }
 
@@ -1070,7 +927,7 @@ class _APhoneAppState extends State<APhoneApp>
       offset = await controller!.setExposureOffset(offset);
     } on CameraException catch (e) {
       _showCameraException(e);
-      rethrow;
+      //rethrow;
     }
   }
 
@@ -1083,7 +940,25 @@ class _APhoneAppState extends State<APhoneApp>
       await controller!.setFocusMode(mode);
     } on CameraException catch (e) {
       _showCameraException(e);
-      rethrow;
+      //rethrow;
+    }
+  }
+
+  Future<void> setStreamingMode(bool mode) async {
+    if (controller == null) {
+      return;
+    }
+
+    isStreaming = mode;
+    try {
+      if (isStreaming)
+        await controller!.startImageStream(sendCameraImage);
+      else
+        await controller!.stopImageStream();
+        maxLen = 0;
+    } on CameraException catch (e) {
+      _showCameraException(e);
+      //rethrow;
     }
   }
 
@@ -1118,30 +993,115 @@ class _APhoneAppState extends State<APhoneApp>
     await vController.play();
   }
 
-  Future<XFile?> takePicture() async {
-    final CameraController? cameraController = controller;
-    if (cameraController == null || !cameraController.value.isInitialized) {
-      showInSnackBar('Error: select a camera first.');
-      return null;
-    }
-
-    if (cameraController.value.isTakingPicture) {
-      // A capture is already pending, do nothing.
-      return null;
-    }
-
-    try {
-      final XFile file = await cameraController.takePicture();
-      return file;
-    } on CameraException catch (e) {
-      _showCameraException(e);
-      return null;
-    }
-  }
-
   void _showCameraException(CameraException e) {
     _logError(e.code, e.description);
     showInSnackBar('Error: ${e.code}\n${e.description}');
+  }
+
+  //From camera streaming, send camera to NDI
+  void sendCameraImage(CameraImage image) {
+    if (!isStreaming) return;
+
+    int totalBytes = image.planes[0].bytes.length +
+        image.planes[1].bytes.length +
+        image.planes[2].bytes.length;
+
+    //print("image width " + image.width.toString());
+
+    if (totalBytes != maxLen) {
+
+      //print("Update frame infos");
+      ndiSend.stopSendFrames();
+
+      calloc.free(pData);
+
+      maxLen = totalBytes;
+      pData = calloc.call<Uint8>(maxLen);
+    frame = NDIFrame(
+        width: image.width,
+        height: image.height,
+        fourCC: NDIlib_FourCC_video_type_e.NDIlib_FourCC_video_type_YV12,
+        pDataA: pData.address,
+        format: NDIlib_frame_format_type_e.NDIlib_frame_format_type_progressive,
+         bytesPerPixel: 2,
+        frameRateN: 30000,
+        frameRateD: 1000,
+      );
+      
+      ndiSend.sendFrames(frame);
+    }
+
+    int t = DateTime.now().millisecondsSinceEpoch;
+    if (t < lastTimeSent + 50) {
+      //print("skip");
+      return;
+    }
+
+    //print("send");
+
+    // var img = convertYUV420ToImage(image);
+    // var bytes = img.getBytes();
+
+
+    int offset = 0;
+    var order = [0,1,2];
+    for (int i = 0; i < image.planes.length; i++) {
+      int index = order[i];
+      pData.asTypedList(maxLen).setRange(
+            offset,
+            offset + image.planes[index].bytes.length,
+            image.planes[index].bytes.buffer.asUint8List(),
+          );
+          offset += image.planes[index].bytes.length;
+    }
+
+    ndiSend.updateFrame(frame);
+
+    lastTimeSent = t;
+  }
+
+  static imglib.Image convertYUV420ToImage(CameraImage cameraImage) {
+    final width = cameraImage.width;
+    final height = cameraImage.height;
+
+    final yRowStride = cameraImage.planes[0].bytesPerRow;
+    final uvRowStride = cameraImage.planes[1].bytesPerRow;
+    final uvPixelStride = cameraImage.planes[1].bytesPerPixel!;
+
+    final image = imglib.Image(width, height);
+
+    for (var w = 0; w < width; w++) {
+      for (var h = 0; h < height; h++) {
+        final uvIndex =
+            uvPixelStride * (w / 2).floor() + uvRowStride * (h / 2).floor();
+        final index = h * width + w;
+        final yIndex = h * yRowStride + w;
+
+        final y = cameraImage.planes[0].bytes[yIndex];
+        final u = cameraImage.planes[1].bytes[uvIndex];
+        final v = cameraImage.planes[2].bytes[uvIndex];
+
+        image.data[index] = yuv2rgb(y, u, v);
+      }
+    }
+    return image;
+  }
+
+  static int yuv2rgb(int y, int u, int v) {
+    // Convert yuv pixel to rgb
+    var r = (y + v * 1436 / 1024 - 179).round();
+    var g = (y - u * 46549 / 131072 + 44 - v * 93604 / 131072 + 91).round();
+    var b = (y + u * 1814 / 1024 - 227).round();
+
+    // Clipping RGB values to be inside boundaries [ 0 , 255 ]
+    r = r.clamp(0, 255);
+    g = g.clamp(0, 255);
+    b = b.clamp(0, 255);
+
+    return 0xff000000 |
+        ((b << 16) & 0xff0000) |
+        ((g << 8) & 0xff00) |
+        (r & 0xff);
   }
 }
 
@@ -1159,6 +1119,7 @@ class CameraApp extends StatelessWidget {
 }
 
 List<CameraDescription> _cameras = <CameraDescription>[];
+late NDISend ndiSend;
 
 Future<void> main() async {
   // Fetch the available cameras before initializing the app.
@@ -1168,8 +1129,11 @@ Future<void> main() async {
   } on CameraException catch (e) {
     _logError(e.code, e.description);
   }
+
+  ndiSend = NDISend("Phone 1");
   runApp(const CameraApp());
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
+  ndiSend.stopSendFrames();
 }
 
 /// This allows a value of type T or T? to be treated as a value of type T?.

@@ -26,6 +26,21 @@ environment:
 # dependencies can be manually updated by changing the version numbers below to
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
+
+dependency_overrides:
+  camera_android:
+    git:
+      dependency: transitive
+      url: https://github.com/lucasoskorep/plugins.git
+      ref: feat/allowCameraZoomToUseAllPhysicalCameras
+      path: packages/camera/camera_android/
+
+  camera:
+    git:
+      url: https://github.com/lucasoskorep/plugins.git
+      ref: feat/allowCameraZoomToUseAllPhysicalCameras
+      path: packages/camera/camera/ 
+      
 dependencies:
   flutter:
     sdk: flutter
@@ -41,6 +56,7 @@ dependencies:
   ansicolor: ^2.0.1
   vibration: ^1.7.5
   path_provider: ^2.0.11
+  image: ^3.2.0
 
 dev_dependencies:
   flutter_test:
