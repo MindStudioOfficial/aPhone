@@ -157,18 +157,22 @@ class _APhoneAppState extends State<APhoneApp>
     switch (msg.address) {
       case "/stream":
         print("Stream set " + msg.arguments[0].toString());
+        setStreamingMode(msg.arguments[0] == 1);
         break;
 
       case "/autoFocus":
         print("Auto Focus set " + msg.arguments[0].toString());
+        setFocusMode(msg.arguments[0] == 1 ? FocusMode.auto : FocusMode.locked);
         break;
 
       case "/autoExposure":
         print("Auto Exposure set " + msg.arguments[0].toString());
+        setExposureMode(msg.arguments[0] == 1 ? ExposureMode.auto : ExposureMode.locked);
         break;
 
       case "/exposure":
         print("Exposure set " + msg.arguments[0].toString());
+        setExposureOffset(msg.arguments[0]);
         break;
 
       case "/focusPoint":
@@ -176,6 +180,7 @@ class _APhoneAppState extends State<APhoneApp>
             msg.arguments[0].toString() +
             "," +
             msg.arguments[1].toString());
+            
         break;
 
       case "/flash":
@@ -748,7 +753,7 @@ class _APhoneAppState extends State<APhoneApp>
       await oldController.dispose();
     }
 
-    final cameraRes = ResolutionPreset.ultraHigh;
+    final cameraRes = ResolutionPreset.veryHigh;
 
     final CameraController cameraController = CameraController(
       cameraDescription,
@@ -1002,6 +1007,10 @@ class _APhoneAppState extends State<APhoneApp>
   void sendCameraImage(CameraImage image) {
     if (!isStreaming) return;
 
+    
+    print(image.width.toString()+" / "+controller!.resolutionPreset.name);
+    //return;
+
     int totalBytes = image.planes[0].bytes.length +
         image.planes[1].bytes.length +
         image.planes[2].bytes.length;
@@ -1020,7 +1029,7 @@ class _APhoneAppState extends State<APhoneApp>
     frame = NDIFrame(
         width: image.width,
         height: image.height,
-        fourCC: NDIlib_FourCC_video_type_e.NDIlib_FourCC_video_type_YV12,
+        fourCC: NDIlib_FourCC_video_type_e.NDIlib_FourCC_video_type_NV12,
         pDataA: pData.address,
         format: NDIlib_frame_format_type_e.NDIlib_frame_format_type_progressive,
          bytesPerPixel: 2,
@@ -1045,7 +1054,7 @@ class _APhoneAppState extends State<APhoneApp>
 
     int offset = 0;
     var order = [0,1,2];
-    for (int i = 0; i < image.planes.length; i++) {
+    for (int i = 0; i < order.length; i++) {
       int index = order[i];
       pData.asTypedList(maxLen).setRange(
             offset,

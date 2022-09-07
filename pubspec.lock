@@ -32,21 +32,17 @@ packages:
   camera:
     dependency: "direct main"
     description:
-      path: "packages/camera/camera"
-      ref: "feat/allowCameraZoomToUseAllPhysicalCameras"
-      resolved-ref: b0e1ea90690923b859b467ccd6f40a77e7347e0b
-      url: "https://github.com/lucasoskorep/plugins.git"
-    source: git
-    version: "0.10.0"
-  camera_android:
-    dependency: "direct overridden"
-    description:
-      path: "packages/camera/camera_android"
-      ref: "feat/allowCameraZoomToUseAllPhysicalCameras"
-      resolved-ref: b0e1ea90690923b859b467ccd6f40a77e7347e0b
-      url: "https://github.com/lucasoskorep/plugins.git"
-    source: git
+      name: camera
+      url: "https://pub.dartlang.org"
+    source: hosted
     version: "0.10.0+1"
+  camera_android:
+    dependency: transitive
+    description:
+      name: camera_android
+      url: "https://pub.dartlang.org"
+    source: hosted
+    version: "0.10.0+2"
   camera_avfoundation:
     dependency: transitive
     description:
