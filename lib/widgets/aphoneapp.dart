@@ -25,6 +25,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:aphone/ndi/bindings/ndi_ffi_bindings.dart';
 
 import 'package:camera/camera.dart';
+import 'package:image/image.dart' as imgLib;
 
 /// Camera example home widget.
 class APhoneApp extends StatefulWidget {
@@ -794,7 +795,7 @@ class _APhoneAppState extends State<APhoneApp> with WidgetsBindingObserver, Tick
 
     //dPrint("send");
 
-    var img = convertYUV420ToImage(image);
+    //imgLib.Image img = convertYUV420ToImage(image);
     // var bytes = img.getBytes();
 
     int offset = 0;
@@ -805,7 +806,7 @@ class _APhoneAppState extends State<APhoneApp> with WidgetsBindingObserver, Tick
             offset + image.planes[index].bytes.length,
             image.planes[index].bytes.buffer.asUint8List(),
           );
-      offset += image.planes[index].bytes.length;
+      offset += image.planes[index].bytesPerRow;
     }
 
     ndiSend.updateFrame(frame);

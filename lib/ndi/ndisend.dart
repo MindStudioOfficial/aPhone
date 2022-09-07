@@ -50,12 +50,13 @@ class NDISend {
     });
 
     _sendIsolate = await Isolate.spawn(
-        _sendFrames,
-        SendObject(
-          frame: frame,
-          sendPort: _sendReceivePort!.sendPort,
-          sendName: _sendName,
-        ));
+      _sendFrames,
+      SendObject(
+        frame: frame,
+        sendPort: _sendReceivePort!.sendPort,
+        sendName: _sendName,
+      ),
+    );
     return completer.future;
   }
 
@@ -87,7 +88,7 @@ class NDISend {
 
     receivePort.listen((data) {
       if (data is NDIFrame) {
-        //print("gotFrame");
+        print("gotFrame");
         if (!object.frame.destroyed && data.pFrame.address != object.frame.pFrame.address) {
           object.frame.destroy();
           object.frame = data;
